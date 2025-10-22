@@ -30,15 +30,14 @@ You are a Python code generator for data analysis. Generate ONLY executable Pyth
 RULES:
 1. Output ONLY Python code - no markdown, no code blocks, no explanations
 2. Do NOT use f-strings - use str() and concatenation with +
-3. End with exactly ONE print() statement that outputs JSON
-4. Import json at the top if needed
+3. Do NOT import anything - json, pd, and df are already available
+4. End with exactly ONE print() statement that outputs JSON
 5. The JSON must have: {"answer": "...", "chart": null or {...}}
 
 EXAMPLES:
 
 User asks: "Plot the spend for each commodity"
 YOUR CODE:
-import json
 spend = df.groupby('Commodity')['Spend (USD)'].sum()
 chart_data = {"type": "bar", "labels": spend.index.tolist(), "data": spend.values.tolist()}
 result = {"answer": "Here is the spend by commodity.", "chart": chart_data}
@@ -46,7 +45,6 @@ print(json.dumps(result))
 
 User asks: "List the commodities"
 YOUR CODE:
-import json
 commodities = df['Commodity'].unique().tolist()
 answer = "The commodities are: " + ", ".join(commodities)
 result = {"answer": answer, "chart": None}
@@ -54,7 +52,6 @@ print(json.dumps(result))
 
 User asks: "What is the total spend?"
 YOUR CODE:
-import json
 total = df['Spend (USD)'].sum()
 answer = "The total spend is $" + str(round(total, 2))
 result = {"answer": answer, "chart": None}
@@ -75,6 +72,9 @@ model = genai.GenerativeModel(
 USER_PROMPT_TEMPLATE = """
 DataFrame 'df' is available with columns shown below.
 pandas is imported as 'pd'.
+json module is already imported and available.
+
+DO NOT IMPORT ANYTHING - all modules are pre-loaded.
 
 Schema:
 {schema}
@@ -84,7 +84,7 @@ Chat History:
 
 User Question: {question}
 
-Generate Python code:
+Generate Python code (no imports):
 """
 
 safe_builtins = {

@@ -1,7 +1,7 @@
 import uvicorn
 import os
 import json
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from pydantic import BaseModel, ValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional, Dict, Any
@@ -19,8 +19,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Be explicit with methods and headers
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "*"],
 )
 
 # --- 2. Request/Response Models ---
@@ -29,7 +30,8 @@ class ChatMessage(BaseModel):
     text: str
 
 class ChatRequest(BaseModel):
-    messages: Optional[List[ChatMessage]] = None
+    # Revert back to a required list. The OPTIONS handler will protect this.
+    messages: List[ChatMessage]
 
 class ChartData(BaseModel):
     type: str
@@ -45,6 +47,15 @@ class ChatResponse(BaseModel):
 def read_root():
     return {"status": "Kearney AI Chatbot API is running"}
 
+
+# --- FIX: Add manual OPTIONS handler for /api/data ---
+@app.options("/api/data")
+async def options_data():
+    """
+    Manually handle OPTIONS preflight requests for the data endpoint.
+    """
+    return Response(status_code=200)
+
 @app.get("/api/data", response_model=List[Dict[str, Any]])
 async def get_raw_data():
     """
@@ -53,27 +64,28 @@ async def get_raw_data():
     data_json = json.loads(df.to_json(orient='records'))
     return data_json
 
+
+# --- FIX: Add manual OPTIONS handler for /api/chat ---
+@app.options("/api/chat")
+async def options_chat():
+    """
+    Manually handle OPTIONS preflight requests for the chat endpoint.
+    """
+    return Response(status_code=200)
+
+
 @app.post("/api/chat", response_model=ChatResponse)
-async def handle_chat(request: Request): # Changed to use raw Request
+async def handle_chat(request: ChatRequest): # Reverted to use Pydantic model
     """
     Receives a chat history, passes it to the QA service,
     and returns the answer.
     """
-    
-    # --- FIX: Manually handle body parsing to avoid OPTIONS error ---
-    try:
-        body = await request.json()
-        chat_request = ChatRequest(**body)
-    except Exception as e:
-        # This catches empty bodies from OPTIONS and other malformed requests
-        print(f"Could not parse request body: {e}")
-        return ChatResponse(answer="Invalid request format.", chart=None)
-    
-    if not chat_request or not chat_request.messages:
+    # The OPTIONS handlers above will prevent empty bodies from ever reaching this
+    if not request.messages:
         return ChatResponse(answer="No query provided.", chart=None)
 
-    history_messages = [msg.dict() for msg in chat_request.messages[:-1]]
-    current_query = chat_request.messages[-1].text
+    history_messages = [msg.dict() for msg in request.messages[:-1]]
+    current_query = request.messages[-1].text
     
     result = {'answer': 'An error occurred.', 'chart': None}
     try:

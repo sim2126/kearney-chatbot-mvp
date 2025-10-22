@@ -25,7 +25,7 @@ ChartJS.register(
 );
 
 // Base URL for the API
-const API_URL = 'http://127.0.0.1:8000';
+const API_URL = 'https://kearney-chatbot-mvp.onrender.com';
 
 function App() {
   const [query, setQuery] = useState('');

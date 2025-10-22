@@ -10,10 +10,7 @@ from app.services.qa_service import get_answer_from_data, df
 
 app = FastAPI(title="Kearney AI Chatbot API")
 
-origins = [
-    "http://localhost:3000",
-    "localhost:3000",
-]
+origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,7 +25,7 @@ class ChatMessage(BaseModel):
     text: str
 
 class ChatRequest(BaseModel):
-    messages: List[ChatMessage]
+    messages: Optional[List[ChatMessage]] = None
 
 class ChartData(BaseModel):
     type: str
@@ -57,20 +54,23 @@ async def handle_chat(request: ChatRequest):
     Receives a chat history, passes it to the QA service,
     and returns the answer.
     """
-    if not request.messages:
-        return ChatResponse(answer="No query provided.")
+    if not request or not request.messages:
+        return ChatResponse(answer="No query provided.", chart=None)
 
     history_messages = [msg.dict() for msg in request.messages[:-1]]
     current_query = request.messages[-1].text
     
-    result = get_answer_from_data(current_query, history_messages)
-    
-    validated_chart = None
-    raw_chart = result.get('chart')
+    result = {'answer': 'An error occurred.', 'chart': None}
+    try:
+        result = get_answer_from_data(current_query, history_messages)
+    except Exception as e:
+        print(f"Error in get_answer_from_data: {e}")
+        result = {'answer': f'An internal error occurred: {e}', 'chart': None}
 
-    if raw_chart:
+    validated_chart = None
+    if result.get('chart'):
         try:
-            validated_chart = ChartData.model_validate(raw_chart)
+            validated_chart = ChartData(**result['chart'])
         except Exception:
             validated_chart = None
     
@@ -83,4 +83,5 @@ if __name__ == "__main__":
                 reload=True
                )
 
+    
 

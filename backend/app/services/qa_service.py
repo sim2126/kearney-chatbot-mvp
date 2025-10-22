@@ -172,7 +172,6 @@ def get_answer_from_data(user_query: str, history: list[dict[str, str]]) -> dict
         except json.JSONDecodeError:
             # This is a critical failure: the AI violated the prompt.
             print(f"CRITICAL: AI violated prompt. Output was not valid JSON: {output}")
-            # Return the raw output so the user can see what went wrong
             return {'answer': f"An error occurred. The AI's response was not valid JSON.\nRaw output: {output}", 'chart': None}
 
     except Exception as e:

@@ -28,7 +28,7 @@ df.info(buf=buffer)
 df_schema = buffer.getvalue()
 
 # --- 4. Initialize Model ---
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-2.5-flash')
 
 # --- 5. "KEARNEY LEVEL" PROMPT (Simplified & Stricter) ---
 # NOTE: {{ and }} are used to escape braces for the .format() method.

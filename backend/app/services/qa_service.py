@@ -28,9 +28,10 @@ df.info(buf=buffer)
 df_schema = buffer.getvalue()
 
 # --- 4. Initialize Model ---
-model = genai.GenerativeModel('gemini-2.5-flash')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # --- 5. "KEARNEY LEVEL" PROMPT (Simplified & Stricter) ---
+# NOTE: {{ and }} are used to escape braces for the .format() method.
 PROMPT_TEMPLATE = """
 You are a data analysis engine. You will be given a pandas DataFrame 'df' and a user question.
 Your ONLY job is to generate a single block of Python code to answer the question.
@@ -55,6 +56,10 @@ The JSON output *must* have this structure:
 - If the user asks for "list out the commodities":
   `clist = df['Commodity'].unique().tolist()`
   `answer = f"The commodities are: {{', '.join(clist)}}."`
+  `print(json.dumps({{"answer": answer, "chart": null}}))`
+- If the user asks "What is the total spend?":
+  `total_spend = df['Spend (USD)'].sum()`
+  `answer = f"The total spend is ${{total_spend:,.2f}}."`
   `print(json.dumps({{"answer": answer, "chart": null}}))`
 - **ALWAYS** return a JSON string. **NEVER** print the raw data.
 - **BAD Example:** `print(df['Commodity'].unique().tolist())`  <-- THIS WILL CRASH THE SYSTEM.
@@ -149,6 +154,7 @@ def get_answer_from_data(user_query: str, history: list[dict[str, str]]) -> dict
             sys.stdout = old_stdout # Restore stdout
             print(f"Error executing generated code: {e}")
             print(f"Code was:\n{generated_code}")
+            # This is a standard Python dictionary
             return {'answer': f"Error analyzing data: {e}", 'chart': None}
         
         sys.stdout = old_stdout
@@ -156,24 +162,29 @@ def get_answer_from_data(user_query: str, history: list[dict[str, str]]) -> dict
         
         # 5. Process the output
         if not output:
+            # This is a standard Python dictionary
             return {'answer': "The query ran but produced no output.", 'chart': None}
 
         try:
             # The prompt *requires* the output to be a JSON string.
             result = json.loads(output)
             if isinstance(result, dict):
+                # This is a standard Python dictionary
                 return {
                     'answer': result.get('answer', 'Query executed.'),
                     'chart': result.get('chart')
                 }
             else:
                 # Fallback if the AI returned valid JSON but not a dict
+                # This is a standard Python dictionary
                 return {'answer': str(result), 'chart': None}
         except json.JSONDecodeError:
             # This is a critical failure: the AI violated the prompt.
             print(f"CRITICAL: AI violated prompt. Output was not valid JSON: {output}")
+            # This is a standard Python dictionary
             return {'answer': f"An error occurred. The AI's response was not valid JSON.\nRaw output: {output}", 'chart': None}
 
     except Exception as e:
+        # This is a standard Python dictionary
         return {'answer': f"An error occurred with the AI model: {e}", 'chart': None}
 

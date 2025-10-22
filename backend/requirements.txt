@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+pandas
+google-generativeai
+python-dotenv
+fastapi-cors

@@ -25,44 +25,46 @@ df.info(buf=buffer)
 df_schema = buffer.getvalue()
 
 SYSTEM_INSTRUCTION = """
-You are a data analysis engine. You will be given a user question and context.
-Your ONLY job is to generate a single block of Python code to answer the question.
+You are a Python code generator for data analysis. Generate ONLY executable Python code, nothing else.
 
-**CRITICAL: ALL output MUST be a single `print()` call at the end, printing a JSON-formatted string.**
-**CRITICAL: Do NOT use f-strings (f"...") as they are not allowed. Use simple string concatenation (+) and str().**
+RULES:
+1. Output ONLY Python code - no markdown, no code blocks, no explanations
+2. Do NOT use f-strings - use str() and concatenation with +
+3. End with exactly ONE print() statement that outputs JSON
+4. Import json at the top if needed
+5. The JSON must have: {"answer": "...", "chart": null or {...}}
 
-The JSON output *must* have this structure:
-{{
-    "answer": "Your natural language answer here",
-    "chart": null
-}}
+EXAMPLES:
 
-**Chart Generation:**
-- If the user asks for "Plot the spend for each commodity.":
-  `spend = df.groupby('Commodity')['Spend (USD)'].sum()`
-  `chart_data = {{"type": "bar", "labels": spend.index.tolist(), "data": spend.values.tolist()}}`
-  `print(json.dumps({{"answer": "Here is the spend by commodity.", "chart": chart_data}}))`
-- If the user asks for a "plot", "chart", or "graph", generate a chart object.
-- The chart object must be: {{"type": "bar|pie", "labels": [...], "data": [...]}}
+User asks: "Plot the spend for each commodity"
+YOUR CODE:
+import json
+spend = df.groupby('Commodity')['Spend (USD)'].sum()
+chart_data = {"type": "bar", "labels": spend.index.tolist(), "data": spend.values.tolist()}
+result = {"answer": "Here is the spend by commodity.", "chart": chart_data}
+print(json.dumps(result))
 
-**Normal Questions (Data, Lists, Numbers):**
-- **Do NOT use f-strings.** Use `str()` and `round()` for formatting.
-- If the user asks for "list out the commodities":
-  `clist = df['Commodity'].unique().tolist()`
-  `answer = "The commodities are: " + ", ".join(clist)`
-  `print(json.dumps({{"answer": answer, "chart": null}}))`
-- If the user asks "What is the total spend?":
-  `total_spend = df['Spend (USD)'].sum()`
-  `answer = "The total spend is $" + str(round(total_spend, 2))`
-  `print(json.dumps({{"answer": answer, "chart": null}}))`
-- **BAD Example:** `print(df['Commodity'].unique().tolist())`
-- **BAD Example:** `answer = f"..."`
+User asks: "List the commodities"
+YOUR CODE:
+import json
+commodities = df['Commodity'].unique().tolist()
+answer = "The commodities are: " + ", ".join(commodities)
+result = {"answer": answer, "chart": None}
+print(json.dumps(result))
 
-**Error Handling:**
-- **No Data:** If a filter results in no data, state that in the answer.
-  `print(json.dumps({{"answer": "No data was found for 'Honey'.", "chart": null}}))`
-- **Vague/Illogical:** If the query is vague or illogical, state that.
-  `print(json.dumps({{"answer": "That query is illogical. Please rephrase.", "chart": null}}))`
+User asks: "What is the total spend?"
+YOUR CODE:
+import json
+total = df['Spend (USD)'].sum()
+answer = "The total spend is $" + str(round(total, 2))
+result = {"answer": answer, "chart": None}
+print(json.dumps(result))
+
+CHART TYPES:
+- bar: {"type": "bar", "labels": [...], "data": [...]}
+- pie: {"type": "pie", "labels": [...], "data": [...]}
+
+Generate code NOW:
 """
 
 model = genai.GenerativeModel(
@@ -71,20 +73,18 @@ model = genai.GenerativeModel(
 )
 
 USER_PROMPT_TEMPLATE = """
-**Available Data:**
-- DataFrame 'df' (pandas as 'pd')
-- 'json' module is pre-imported and available.
+DataFrame 'df' is available with columns shown below.
+pandas is imported as 'pd'.
 
-**Schema:**
+Schema:
 {schema}
 
-**Chat History:**
+Chat History:
 {chat_history}
 
-**User Question:**
-{question}
+User Question: {question}
 
-**Python Code (JSON output only):**
+Generate Python code:
 """
 
 safe_builtins = {
@@ -133,6 +133,10 @@ def get_answer_from_data(user_query: str, history: list[dict[str, str]]) -> dict
         )
         generated_code = response.text.strip()
         
+        generated_code = generated_code.replace('```python', '').replace('```', '').strip()
+        
+        print(f"Generated code:\n{generated_code}")
+        
         local_vars = {"df": df.copy(), "pd": pd, "json": json}
         
         old_stdout = sys.stdout
@@ -163,8 +167,8 @@ def get_answer_from_data(user_query: str, history: list[dict[str, str]]) -> dict
             else:
                 return {'answer': str(result), 'chart': None}
         except json.JSONDecodeError:
-            print(f"CRITICAL: AI violated prompt. Output was not valid JSON: {output}")
-            return {'answer': f"An error occurred. The AI's response was not valid JSON.\nRaw output: {output}", 'chart': None}
+            print(f"Output was not valid JSON: {output}")
+            return {'answer': output, 'chart': None}
 
     except Exception as e:
         return {'answer': f"An error occurred with the AI model: {e}", 'chart': None}

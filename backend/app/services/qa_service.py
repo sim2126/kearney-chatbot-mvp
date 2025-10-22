@@ -4,8 +4,9 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 from io import StringIO
 import sys
-import json # Import json
+import json
 
+# --- 1. Load Environment & Configure API ---
 env_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
 load_dotenv(dotenv_path=env_path)
 
@@ -14,124 +15,164 @@ if not api_key:
     raise ValueError("GOOGLE_API_KEY not found. Please set it in the backend/.env file.")
 genai.configure(api_key=api_key)
 
+# --- 2. Load Data ---
 DATA_FILE_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'Sugar_Spend_Data.csv')
 try:
     df = pd.read_csv(DATA_FILE_PATH)
 except FileNotFoundError:
     raise FileNotFoundError(f"Data file not found. Make sure 'Sugar_Spend_Data.csv' is in 'backend/app/data/'")
 
+# --- 3. Prepare Context for the LLM ---
 buffer = StringIO()
 df.info(buf=buffer)
 df_schema = buffer.getvalue()
-df_head = df.head().to_string()
 
-model = genai.GenerativeModel('gemini-2.5-flash')
+# --- 4. Initialize Model ---
+model = genai.GenerativeModel('gemini-1.5-flash')
 
+# --- 5. NEW "KEARNEY LEVEL" PROMPT (Simplified & Stricter) ---
 PROMPT_TEMPLATE = """
-You are a Senior Procurement Analyst at Kearney, acting as an AI assistant.
-Your task is to help a client analyze their 'Sugar_Spend_Data.csv' file, which is loaded as a pandas DataFrame named 'df'.
-You must answer their questions by generating *only* Python code.
+You are a data analysis engine. You will be given a pandas DataFrame 'df' and a user question.
+Your ONLY job is to generate a single block of Python code to answer the question.
 
-**Persona Guidelines:**
-- **Insightful:** Do not just give numbers; provide context. (e.g., "Total spend is $1.23M...")
-- **Proactive:** After answering, *always* suggest a logical follow-up question. (e.g., "...Would you like to see this broken down by supplier?")
-- **Polished:** Format numbers clearly. Use 'M' for millions, 'K' for thousands, and add currency symbols. (e.g., `f"${{(df['Spend (USD)'].sum() / 1_000_000):.2f}}M"`)
+**CRITICAL: ALL output MUST be a single `print()` call at the end, printing a JSON-formatted string.**
 
-**Error Handling Guidelines:**
-- **Illogical Queries:** If a query is mathematically or logically impossible (e.g., dividing spend by a supplier's name), your 'answer' *must* be a polite explanation of the error. Do not generate code that will crash. Set 'chart' to `None`.
-- **Vague Queries:** If a query is vague (e.g., 'tell me about Südzucker'), provide a high-level summary (e.g., total spend, commodities supplied) and use the 'answer' text to *proactively ask* for clarification (e.g., '...Are you interested in their total spend, or the specific commodities they supply?').
-- **No-Data Queries:** If a query filters for data that results in an empty DataFrame or `NaN` (e.g., 'spend on Honey'), your code *must* check for this (e.g., `if filtered_df.empty:`). Your 'answer' *must* state 'No records were found for that query' instead of returning `$0.00` or `$NaN`.
+The JSON output *must* have this structure:
+{
+    "answer": "Your natural language answer here",
+    "chart": null  // or a chart object
+}
 
-**Python Code Constraints:**
-1.  Your output *must* be a single, executable block of Python. Do not include "```python" or "```".
-2.  Your code *must* end with a `print()` statement.
-3.  The `print()` statement *must* output a single JSON string.
-4.  The JSON object *must* have two keys:
-    a. "answer" (string): Your natural language answer, including the insight and the follow-up question.
-    b. "chart" (object, optional): A chart data object if the user requests a plot.
-5.  The "chart" object must have "type" ('bar' or 'pie'), "labels" (list of strings), and "data" (list of numbers).
-6.  You *cannot* import any libraries. `pandas` is pre-loaded as `pd`, `json` is pre-loaded as `json`, and the DataFrame is `df`.
+**Chart Generation:**
+- If the user asks for a "plot", "chart", or "graph", generate a chart object.
+- The chart object must be: {"type": "bar|pie", "labels": [...], "data": [...]}
+- Example:
+  `spend = df.groupby('Commodity')['Spend (USD)'].sum()`
+  `chart_data = {{"type": "bar", "labels": spend.index.tolist(), "data": spend.values.tolist()}}`
+  `print(json.dumps({{"answer": "Here is the spend by commodity.", "chart": chart_data}}))`
 
-**DataFrame Schema:**
+**Normal Questions (Data, Lists, Numbers):**
+- If the user asks for data (e.g., "list commodities", "what is total spend?"), calculate it and return it in the "answer" field.
+- **ALWAYS** return a JSON string. **NEVER** print the raw data.
+- **GOOD Example (for "list commodities"):**
+  `clist = df['Commodity'].unique().tolist()`
+  `answer = f"The commodities are: {', '.join(clist)}."`
+  `print(json.dumps({{"answer": answer, "chart": null}}))`
+- **BAD Example:** `print(df['Commodity'].unique().tolist())`  <-- THIS WILL CRASH THE SYSTEM.
+
+**Error Handling:**
+- **No Data:** If a filter results in no data, state that in the answer.
+  `print(json.dumps({{"answer": "No data was found for 'Honey'.", "chart": null}}))`
+- **Vague/Illogical:** If the query is vague or illogical, state that.
+  `print(json.dumps({{"answer": "That query is illogical. Please rephrase.", "chart": null}}))`
+
+**Available Data:**
+- DataFrame 'df' (pandas as 'pd')
+- 'json' module is pre-imported and available.
+
+**Schema:**
 {schema}
-
-**DataFrame Head:**
-{head}
-
-**Chat History:**
-{chat_history}
 
 **User Question:**
 {question}
 
-**Python Code:**
+**Python Code (JSON output only):**
 """
 
+
+# --- 6. "Safe" Execution Environment ---
+# Define the "safe" environment for exec()
+# This whitelist prevents malicious code (e.g., file access, network)
+safe_builtins = {
+    'print': print,
+    'len': len,
+    'sum': sum,
+    'max': max,
+    'min': min,
+    'round': round,
+    'str': str,
+    'int': int,
+    'float': float,
+    'list': list,
+    'dict': dict,
+    'tuple': tuple,
+    'set': set,
+    'range': range,
+    'abs': abs,
+    'all': all,
+    'any': any,
+    'bool': bool,
+    'repr': repr,
+    'f"{}"': f"{''}", # For f-string formatting
+}
+
+# --- 7. Core Query Function ---
 def get_answer_from_data(user_query: str, history: list[dict[str, str]]) -> dict:
     """
     Uses Gemini to generate and execute Python code to answer a question about the dataframe.
+    Returns a dictionary: {'answer': ..., 'chart': ...}
     """
+    
+    # 1. Format the chat history
     formatted_history = ""
     for message in history:
         if message['sender'] == 'user':
             formatted_history += f"User: {message['text']}\n"
         else:
-            text_content = message.get('text', '')
-            formatted_history += f"Assistant: {text_content}\n"
-
+            # We only care about the *text* of the bot's answer for history
+            formatted_history += f"Assistant: {message['text']}\n"
+    
+    # 2. Construct the prompt
     prompt = PROMPT_TEMPLATE.format(
         schema=df_schema,
-        head=df_head,
         chat_history=formatted_history,
         question=user_query
     )
-
+    
+    # 3. Send prompt to Gemini
     try:
         response = model.generate_content(prompt)
         generated_code = response.text.strip()
-
-        local_vars = {"df": df.copy(), "pd": pd, "json": json}
         
-        safe_builtins = {
-            "print": print,
-            "str": str,
-            "int": int,
-            "float": float,
-            "list": list,
-            "dict": dict,
-            "len": len,
-            "sum": sum,
-            "round": round,
-            "max": max,
-            "min": min,
-            "abs": abs,
-            "True": True,
-            "False": False,
-            "None": None,
-        }
+        # 4. Safely execute the generated code
+        local_vars = {"df": df.copy(), "pd": pd, "json": json}
         
         old_stdout = sys.stdout
         redirected_output = StringIO()
         sys.stdout = redirected_output
         
         try:
+            # Execute in a sandboxed environment
             exec(generated_code, {"__builtins__": safe_builtins}, local_vars)
         except Exception as e:
-            sys.stdout = old_stdout 
+            sys.stdout = old_stdout # Restore stdout
             print(f"Error executing generated code: {e}")
             print(f"Code was:\n{generated_code}")
-            error_json = {"answer": f"Error analyzing data: {e}", "chart": None}
-            return error_json
+            return {'answer': f"Error analyzing data: {e}", 'chart': None}
         
         sys.stdout = old_stdout
         output = redirected_output.getvalue().strip()
         
+        # 5. Process the output
         if not output:
-            return {"answer": "I was unable to find an answer to that question.", "chart": None}
+            return {'answer': "The query ran but produced no output.", 'chart': None}
 
-        return json.loads(output)
+        try:
+            # The prompt *requires* the output to be a JSON string.
+            result = json.loads(output)
+            if isinstance(result, dict):
+                return {
+                    'answer': result.get('answer', 'Query executed.'),
+                    'chart': result.get('chart')
+                }
+            else:
+                # Fallback if the AI returned valid JSON but not a dict
+                return {'answer': str(result), 'chart': None}
+        except json.JSONDecodeError:
+            # This is a critical failure: the AI violated the prompt.
+            print(f"CRITICAL: AI violated prompt. Output was not valid JSON: {output}")
+            return {'answer': f"An error occurred. The AI's response was not valid JSON.", 'chart': None}
 
     except Exception as e:
-        print(f"An error occurred with the AI model or JSON parsing: {e}")
-        return {"answer": f"An error occurred: {e}", "chart": None}
+        return {'answer': f"An error occurred with the AI model: {e}", 'chart': None}
 

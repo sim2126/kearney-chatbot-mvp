@@ -6,7 +6,6 @@ from io import StringIO
 import sys
 import json
 
-# --- 1. Load Environment & Configure API ---
 env_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
 load_dotenv(dotenv_path=env_path)
 
@@ -15,21 +14,16 @@ if not api_key:
     raise ValueError("GOOGLE_API_KEY not found. Please set it in the backend/.env file.")
 genai.configure(api_key=api_key)
 
-# --- 2. Load Data ---
 DATA_FILE_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'Sugar_Spend_Data.csv')
 try:
     df = pd.read_csv(DATA_FILE_PATH)
 except FileNotFoundError:
     raise FileNotFoundError(f"Data file not found. Make sure 'Sugar_Spend_Data.csv' is in 'backend/app/data/'")
 
-# --- 3. Prepare Context for the LLM ---
 buffer = StringIO()
 df.info(buf=buffer)
 df_schema = buffer.getvalue()
 
-# --- 4. "KEARNEY LEVEL" SYSTEM INSTRUCTION ---
-# This is the prompt that explicitly forbids f-strings to work with the sandbox
-# NOTE: {{ and }} are used to escape braces for the .format() method.
 SYSTEM_INSTRUCTION = """
 You are a data analysis engine. You will be given a user question and context.
 Your ONLY job is to generate a single block of Python code to answer the question.
@@ -40,7 +34,7 @@ Your ONLY job is to generate a single block of Python code to answer the questio
 The JSON output *must* have this structure:
 {{
     "answer": "Your natural language answer here",
-    "chart": null  // or a chart object
+    "chart": null
 }}
 
 **Chart Generation:**
@@ -61,8 +55,8 @@ The JSON output *must* have this structure:
   `total_spend = df['Spend (USD)'].sum()`
   `answer = "The total spend is $" + str(round(total_spend, 2))`
   `print(json.dumps({{"answer": answer, "chart": null}}))`
-- **BAD Example:** `print(df['Commodity'].unique().tolist())`  <-- THIS WILL CRASH THE SYSTEM.
-- **BAD Example:** `answer = f"..."` <-- THIS WILL CRASH THE SYSTEM.
+- **BAD Example:** `print(df['Commodity'].unique().tolist())`
+- **BAD Example:** `answer = f"..."`
 
 **Error Handling:**
 - **No Data:** If a filter results in no data, state that in the answer.
@@ -71,16 +65,11 @@ The JSON output *must* have this structure:
   `print(json.dumps({{"answer": "That query is illogical. Please rephrase.", "chart": null}}))`
 """
 
-# --- 5. Initialize Model ---
-# Using gemini-pro as it's the standard, stable model
-# FIX: Pass the SYSTEM_INSTRUCTION here, at initialization.
 model = genai.GenerativeModel(
     'gemini-2.5-flash',
     system_instruction=SYSTEM_INSTRUCTION
 )
 
-# --- 6. USER PROMPT TEMPLATE ---
-# This just contains the data and the user's specific query
 USER_PROMPT_TEMPLATE = """
 **Available Data:**
 - DataFrame 'df' (pandas as 'pd')
@@ -98,8 +87,6 @@ USER_PROMPT_TEMPLATE = """
 **Python Code (JSON output only):**
 """
 
-# --- 7. "Safe" Execution Environment ---
-# This is the sandbox you were referring to
 safe_builtins = {
     'print': print,
     'len': len,
@@ -122,14 +109,7 @@ safe_builtins = {
     'repr': repr,
 }
 
-# --- 8. Core Query Function ---
 def get_answer_from_data(user_query: str, history: list[dict[str, str]]) -> dict:
-    """
-    Uses Gemini to generate and execute Python code to answer a question about the dataframe.
-    Returns a dictionary: {'answer': ..., 'chart': ...}
-    """
-    
-    # 1. Format the chat history
     formatted_history = ""
     for message in history:
         if message['sender'] == 'user':
@@ -137,19 +117,15 @@ def get_answer_from_data(user_query: str, history: list[dict[str, str]]) -> dict
         else:
             formatted_history += f"Assistant: {message['text']}\n"
     
-    # 2. Construct the prompt
     prompt = USER_PROMPT_TEMPLATE.format(
         schema=df_schema,
         chat_history=formatted_history,
         question=user_query
     )
     
-    # 3. Send prompt to Gemini with System Instruction
     try:
-        # FIX: Remove the 'system_instruction' keyword argument from here.
         response = model.generate_content(
             prompt,
-            # Set temperature to 0.0 for deterministic, rule-following behavior
             generation_config=genai.types.GenerationConfig(
                 candidate_count=1,
                 temperature=0.0
@@ -157,7 +133,6 @@ def get_answer_from_data(user_query: str, history: list[dict[str, str]]) -> dict
         )
         generated_code = response.text.strip()
         
-        # 4. Safely execute the generated code
         local_vars = {"df": df.copy(), "pd": pd, "json": json}
         
         old_stdout = sys.stdout
@@ -165,10 +140,9 @@ def get_answer_from_data(user_query: str, history: list[dict[str, str]]) -> dict
         sys.stdout = redirected_output
         
         try:
-            # Execute in a sandboxed environment
             exec(generated_code, {"__builtins__": safe_builtins}, local_vars)
         except Exception as e:
-            sys.stdout = old_stdout # Restore stdout
+            sys.stdout = old_stdout
             print(f"Error executing generated code: {e}")
             print(f"Code was:\n{generated_code}")
             return {'answer': f"Error analyzing data: {e}", 'chart': None}
@@ -176,12 +150,10 @@ def get_answer_from_data(user_query: str, history: list[dict[str, str]]) -> dict
         sys.stdout = old_stdout
         output = redirected_output.getvalue().strip()
         
-        # 5. Process the output
         if not output:
             return {'answer': "The query ran but produced no output.", 'chart': None}
 
         try:
-            # The prompt *requires* the output to be a JSON string.
             result = json.loads(output)
             if isinstance(result, dict):
                 return {
@@ -196,4 +168,3 @@ def get_answer_from_data(user_query: str, history: list[dict[str, str]]) -> dict
 
     except Exception as e:
         return {'answer': f"An error occurred with the AI model: {e}", 'chart': None}
-

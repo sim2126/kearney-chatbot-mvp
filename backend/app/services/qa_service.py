@@ -27,10 +27,7 @@ buffer = StringIO()
 df.info(buf=buffer)
 df_schema = buffer.getvalue()
 
-# --- 4. Initialize Model ---
-model = genai.GenerativeModel('gemini-2.5-flash')
-
-# --- 5. "KEARNEY LEVEL" SYSTEM INSTRUCTION ---
+# --- 4. "KEARNEY LEVEL" SYSTEM INSTRUCTION ---
 # This is the prompt that explicitly forbids f-strings to work with the sandbox
 # NOTE: {{ and }} are used to escape braces for the .format() method.
 SYSTEM_INSTRUCTION = """
@@ -73,6 +70,14 @@ The JSON output *must* have this structure:
 - **Vague/Illogical:** If the query is vague or illogical, state that.
   `print(json.dumps({{"answer": "That query is illogical. Please rephrase.", "chart": null}}))`
 """
+
+# --- 5. Initialize Model ---
+# Using gemini-pro as it's the standard, stable model
+# FIX: Pass the SYSTEM_INSTRUCTION here, at initialization.
+model = genai.GenerativeModel(
+    'gemini-2.5-flash',
+    system_instruction=SYSTEM_INSTRUCTION
+)
 
 # --- 6. USER PROMPT TEMPLATE ---
 # This just contains the data and the user's specific query
@@ -141,15 +146,14 @@ def get_answer_from_data(user_query: str, history: list[dict[str, str]]) -> dict
     
     # 3. Send prompt to Gemini with System Instruction
     try:
+        # FIX: Remove the 'system_instruction' keyword argument from here.
         response = model.generate_content(
             prompt,
             # Set temperature to 0.0 for deterministic, rule-following behavior
             generation_config=genai.types.GenerationConfig(
                 candidate_count=1,
                 temperature=0.0
-            ),
-            # Pass the strict rules as a system instruction
-            system_instruction=SYSTEM_INSTRUCTION
+            )
         )
         generated_code = response.text.strip()
         
